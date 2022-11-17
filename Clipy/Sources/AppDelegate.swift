@@ -20,13 +20,14 @@ import Screeen
 import RxScreeen
 import RealmSwift
 import LetsMove
+import Combine
 
 @NSApplicationMain
 class AppDelegate: NSObject, NSMenuItemValidation {
 
     // MARK: - Properties
     let screenshotObserver = ScreenShotObserver()
-    let disposeBag = DisposeBag()
+    private var subscriptions = Set<AnyCancellable>()
 
     // MARK: - Init
     override func awakeFromNib() {
@@ -213,33 +214,31 @@ extension AppDelegate: NSApplicationDelegate {
 private extension AppDelegate {
     func bind() {
         // Login Item
-        AppEnvironment.current.defaults.rx.observe(Bool.self, Constants.UserDefaults.loginItem, retainSelf: false)
-            .compactMap { $0 }
-            .subscribe(onNext: { [weak self] _ in
+        CPYUserDefault.shared.publisher(for: \.loginItem)
+            .sink { [weak self] _ in
                 self?.reflectLoginItemState()
-            })
-            .disposed(by: disposeBag)
+            }
+            .store(in: &subscriptions)
+        
         // Observe Screenshot
-        let observerScreenshot = AppEnvironment.current.defaults.rx.observe(Bool.self, Constants.Beta.observerScreenshot, retainSelf: false)
-            .compactMap { $0 }
-            .share(replay: 1)
-        observerScreenshot
-            .subscribe(onNext: { [weak self] enabled in
-                self?.screenshotObserver.isEnabled = enabled
-            })
-            .disposed(by: disposeBag)
-        observerScreenshot
-            .filter { $0 }
-            .take(1)
-            .subscribe(onNext: { [weak self] _ in
-                self?.screenshotObserver.start()
-            })
-            .disposed(by: disposeBag)
-        // Observe Screenshot image
-        screenshotObserver.rx.addedImage
-            .subscribe(onNext: { image in
-                AppEnvironment.current.clipService.create(with: image)
-            })
-            .disposed(by: disposeBag)
+        let observerScreenshot = CPYUserDefault.shared.publisher(for: \.observerScreenshot).share()
+        
+        observerScreenshot.sink { [weak self] isEnabled in
+            self?.screenshotObserver.isEnabled = isEnabled
+        }
+        .store(in: &subscriptions)
+        
+        observerScreenshot.prefix(1)
+            .sink { [weak self] output in
+                self?.screenshotObserver.isEnabled = output
+        }
+        .store(in: &subscriptions)
+
+//        // Observe Screenshot image
+//        screenshotObserver.rx.addedImage
+//            .subscribe(onNext: { image in
+//                AppEnvironment.current.clipService.create(with: image)
+//            })
+//            .disposed(by:x disposeBag)
     }
 }

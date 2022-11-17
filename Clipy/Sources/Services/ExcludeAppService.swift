@@ -11,15 +11,15 @@
 //
 
 import Foundation
-import RxSwift
-import RxCocoa
+import AppKit
+import Combine
 
 final class ExcludeAppService {
 
     // MARK: - Properties
     fileprivate(set) var applications = [CPYAppInfo]()
-    fileprivate var frontApplication = BehaviorRelay<NSRunningApplication?>(value: nil)
-    fileprivate var disposeBag = DisposeBag()
+    private var cancellable: Cancellable?
+    private var frontApp: NSRunningApplication?
 
     // MARK: - Initialize
     init(applications: [CPYAppInfo]) {
@@ -31,12 +31,16 @@ final class ExcludeAppService {
 // MARK: - Monitor Applications
 extension ExcludeAppService {
     func startMonitoring() {
-        disposeBag = DisposeBag()
         // Monitoring top active application
-        NSWorkspace.shared.notificationCenter.rx.notification(NSWorkspace.didActivateApplicationNotification)
+        cancellable = NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.didActivateApplicationNotification)
             .map { $0.userInfo?["NSWorkspaceApplicationKey"] as? NSRunningApplication }
-            .bind(to: frontApplication)
-            .disposed(by: disposeBag)
+            .handleEvents(receiveOutput: { obj in
+                print("didActivateApplication:\(String(describing: obj))")
+            })
+            .sink(receiveValue: { [weak self] app in
+                self?.frontApp = app
+            })
     }
 }
 
@@ -44,7 +48,7 @@ extension ExcludeAppService {
 extension ExcludeAppService {
     func frontProcessIsExcludedApplication() -> Bool {
         if applications.isEmpty { return false }
-        guard let frontApplicationIdentifier = frontApplication.value?.bundleIdentifier else { return false }
+        guard let frontApplicationIdentifier = frontApp?.bundleIdentifier else { return false }
 
         for app in applications where app.identifier == frontApplicationIdentifier {
             return true

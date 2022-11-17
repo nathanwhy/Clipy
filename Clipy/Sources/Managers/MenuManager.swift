@@ -13,8 +13,7 @@
 import Cocoa
 import PINCache
 import RealmSwift
-import RxCocoa
-import RxSwift
+import Combine
 
 final class MenuManager: NSObject {
 
@@ -29,7 +28,6 @@ final class MenuManager: NSObject {
     fileprivate let folderIcon = Asset.iconFolder.image
     fileprivate let snippetIcon = Asset.iconText.image
     // Other
-    fileprivate let disposeBag = DisposeBag()
     fileprivate let notificationCenter = NotificationCenter.default
     fileprivate let kMaxKeyEquivalents = 10
     fileprivate let shortenSymbol = "..."
@@ -37,6 +35,9 @@ final class MenuManager: NSObject {
     fileprivate let realm = try! Realm()
     fileprivate var clipToken: NotificationToken?
     fileprivate var snippetToken: NotificationToken?
+    
+    private var subscriptions = Set<AnyCancellable>()
+
 
     // MARK: - Enum Values
     enum StatusType: Int {
@@ -110,65 +111,56 @@ private extension MenuManager {
                             }
                         }
         // Menu icon
-        AppEnvironment.current.defaults.rx.observe(Int.self, Constants.UserDefaults.showStatusItem, retainSelf: false)
+        CPYUserDefault.shared.publisher(for: \.showStatusItem)
             .compactMap { $0 }
-            .asDriver(onErrorDriveWith: .empty())
-            .drive(onNext: { [weak self] key in
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] key in
                 self?.changeStatusItem(StatusType(rawValue: key) ?? .black)
-            })
-            .disposed(by: disposeBag)
+            }.store(in: &subscriptions)
+        
         // Sort clips
-        AppEnvironment.current.defaults.rx.observe(Bool.self, Constants.UserDefaults.reorderClipsAfterPasting, options: [.new], retainSelf: false)
+        CPYUserDefault.shared.publisher(for: \.reorderClipsAfterPasting)
             .compactMap { $0 }
-            .asDriver(onErrorDriveWith: .empty())
-            .drive(onNext: { [weak self] _ in
-                guard let wSelf = self else { return }
-                wSelf.createClipMenu()
-            })
-            .disposed(by: disposeBag)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] key in
+                self?.createClipMenu()
+            }.store(in: &subscriptions)
+        
+        
         // Edit snippets
-        notificationCenter.rx.notification(Notification.Name(rawValue: Constants.Notification.closeSnippetEditor))
-            .asDriver(onErrorDriveWith: .empty())
-            .drive(onNext: { [weak self] _ in
+        notificationCenter
+            .publisher(for: Notification.Name(rawValue: Constants.Notification.closeSnippetEditor))
+            .receive(on: DispatchQueue.main)
+            .sink(receiveValue: { [weak self] _ in
                 self?.createClipMenu()
             })
-            .disposed(by: disposeBag)
+            .store(in: &subscriptions)
         // Observe change preference settings
-        let defaults = AppEnvironment.current.defaults
-        var menuChangedObservables = [Observable<Void>]()
-        menuChangedObservables.append(defaults.rx.observe(Bool.self, Constants.UserDefaults.addClearHistoryMenuItem, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Int.self, Constants.UserDefaults.maxHistorySize, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Bool.self, Constants.UserDefaults.showIconInTheMenu, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Int.self, Constants.UserDefaults.numberOfItemsPlaceInline, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Int.self, Constants.UserDefaults.numberOfItemsPlaceInsideFolder, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Int.self, Constants.UserDefaults.maxMenuItemTitleLength, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Bool.self, Constants.UserDefaults.menuItemsTitleStartWithZero, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Bool.self, Constants.UserDefaults.menuItemsAreMarkedWithNumbers, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Bool.self, Constants.UserDefaults.showToolTipOnMenuItem, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Bool.self, Constants.UserDefaults.showImageInTheMenu, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Bool.self, Constants.UserDefaults.addNumericKeyEquivalents, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Int.self, Constants.UserDefaults.maxLengthOfToolTip, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        menuChangedObservables.append(defaults.rx.observe(Bool.self, Constants.UserDefaults.showColorPreviewInTheMenu, options: [.new], retainSelf: false)
-                                        .compactMap { $0 }.distinctUntilChanged().map { _ in })
-        Observable.merge(menuChangedObservables)
-            .throttle(.seconds(1), scheduler: MainScheduler.instance)
-            .asDriver(onErrorDriveWith: .empty())
-            .drive(onNext: { [weak self] in
+
+        var observables = [
+            CPYUserDefault.shared.publisher(for: \.addClearHistoryMenuItem).removeDuplicates().map({ _ in }).eraseToAnyPublisher()
+        ]
+        observables.append(contentsOf: [
+            CPYUserDefault.shared.publisher(for: \.addClearHistoryMenuItem).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.maxHistorySize).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.showIconInTheMenu).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.numberOfItemsPlaceInline).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.numberOfItemsPlaceInsideFolder).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.maxMenuItemTitleLength).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.menuItemsTitleStartWithZero).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.menuItemsAreMarkedWithNumbers).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.showToolTipOnMenuItem).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.showImageInTheMenu).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.addNumericKeyEquivalents).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.maxLengthOfToolTip).removeDuplicates().map({ _ in }).eraseToAnyPublisher(),
+            CPYUserDefault.shared.publisher(for: \.showColorPreviewInTheMenu).removeDuplicates().map({ _ in }).eraseToAnyPublisher()
+        ])
+        Publishers.MergeMany(observables)
+            .debounce(for: .milliseconds(1000), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                assert(Thread.isMainThread)
                 self?.createClipMenu()
-            })
-            .disposed(by: disposeBag)
+            }.store(in: &subscriptions)
     }
 }
 

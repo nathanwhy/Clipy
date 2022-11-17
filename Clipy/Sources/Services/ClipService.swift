@@ -14,40 +14,41 @@ import Foundation
 import Cocoa
 import RealmSwift
 import PINCache
-import RxSwift
-import RxCocoa
+import Combine
 
 final class ClipService {
 
     // MARK: - Properties
-    fileprivate var cachedChangeCount = BehaviorRelay<Int>(value: 0)
-    fileprivate var storeTypes = [String: NSNumber]()
-    fileprivate let scheduler = SerialDispatchQueueScheduler(qos: .userInteractive)
-    fileprivate let lock = NSRecursiveLock(name: "com.clipy-app.Clipy.ClipUpdatable")
-    fileprivate var disposeBag = DisposeBag()
+    private var storeTypes = [String: NSNumber]()
+    private let lock = NSRecursiveLock(name: "com.clipy-app.Clipy.ClipUpdatable")
+    
+    private var changeCount: Int = 0
+    private var timerCancellable: AnyCancellable?
+    private var storeTypeCancellable: AnyCancellable?
+    private var queue = DispatchQueue.global(qos: .userInteractive)
+    private var subscriptions = Set<AnyCancellable>()
 
     // MARK: - Clips
     func startMonitoring() {
-        disposeBag = DisposeBag()
         // Pasteboard observe timer
-        Observable<Int>.interval(.microseconds(750), scheduler: scheduler)
-            .map { _ in NSPasteboard.general.changeCount }
-            .withLatestFrom(cachedChangeCount.asObservable()) { ($0, $1) }
-            .filter { $0 != $1 }
-            .subscribe(onNext: { [weak self] changeCount, _ in
-                self?.cachedChangeCount.accept(changeCount)
+        Timer.publish(every: 0.75, on: .current, in: .default)
+            .autoconnect()
+            .map{ _ in NSPasteboard.general.changeCount }
+            .removeDuplicates()
+            .subscribe(on: queue)
+            .sink(receiveValue: { [weak self] output in
+                self?.changeCount = output
                 self?.create()
             })
-            .disposed(by: disposeBag)
+            .store(in: &subscriptions)
+        
         // Store types
-        AppEnvironment.current.defaults.rx
-            .observe([String: NSNumber].self, Constants.UserDefaults.storeTypes)
-            .compactMap { $0 }
-            .asDriver(onErrorDriveWith: .empty())
-            .drive(onNext: { [weak self] in
-                self?.storeTypes = $0
+        CPYUserDefault.shared.publisher(for: \.storyType)
+            .subscribe(on: DispatchQueue.main)
+            .sink(receiveValue: { [weak self] output in
+                self?.storeTypes = output
             })
-            .disposed(by: disposeBag)
+            .store(in: &subscriptions)
     }
 
     func clearAll() {
@@ -77,7 +78,8 @@ final class ClipService {
     }
 
     func incrementChangeCount() {
-        cachedChangeCount.accept(cachedChangeCount.value + 1)
+        // to do
+//        cachedChangeCount.accept(cachedChangeCount.value + 1)
     }
 
 }

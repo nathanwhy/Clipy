@@ -11,25 +11,25 @@
 //
 
 import Foundation
-import RxSwift
 import RealmSwift
 import PINCache
+import Combine
 
 final class DataCleanService {
 
     // MARK: - Properties
-    fileprivate var disposeBag = DisposeBag()
-    fileprivate let scheduler = SerialDispatchQueueScheduler(qos: .utility)
-
+    private var queue = DispatchQueue(label: "clean-data", qos: .utility)
+    private var subscriptions = Set<AnyCancellable>()
+    
     // MARK: - Monitoring
     func startMonitoring() {
-        disposeBag = DisposeBag()
         // Clean datas every 30 minutes
-        Observable<Int>.interval(.seconds(60 * 30), scheduler: scheduler)
-            .subscribe(onNext: { [weak self] _ in
+        Timer.publish(every: 1800, on: .current, in: .default)
+            .autoconnect()
+            .subscribe(on: queue)
+            .sink { [weak self] _ in
                 self?.cleanDatas()
-            })
-            .disposed(by: disposeBag)
+            }.store(in: &subscriptions)
     }
 
     // MARK: - Delete Data
