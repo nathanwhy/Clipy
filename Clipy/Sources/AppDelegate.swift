@@ -12,12 +12,9 @@
 
 import Cocoa
 import Sparkle
-import RxCocoa
-import RxSwift
 import LoginServiceKit
 import Magnet
 import Screeen
-import RxScreeen
 import RealmSwift
 import LetsMove
 import Combine
